@@ -3417,7 +3417,8 @@ TEST_F(MasterTest, UnregisteredFrameworksAfterTearDown)
 // This tests /tasks endpoint to return correct task information.
 TEST_F(MasterTest, TasksEndpoint)
 {
-  Try<Owned<cluster::Master>> master = StartMaster();
+  master::Flags masterFlags = CreateMasterFlags();
+  Try<Owned<cluster::Master>> master = StartMaster(masterFlags);
   ASSERT_SOME(master);
 
   MockExecutor exec(DEFAULT_EXECUTOR_ID);
@@ -3433,65 +3434,273 @@ TEST_F(MasterTest, TasksEndpoint)
 
   EXPECT_CALL(sched, registered(&driver, _, _));
 
-  Future<vector<Offer>> offers;
+  process::Queue<Offer> offers;
   EXPECT_CALL(sched, resourceOffers(&driver, _))
-    .WillOnce(FutureArg<1>(&offers))
-    .WillRepeatedly(Return()); // Ignore subsequent offers.
+    .WillRepeatedly(EnqueueOffers(&offers));
 
   driver.start();
 
-  AWAIT_READY(offers);
-  ASSERT_NE(0u, offers->size());
+  // Testing the general query "/master/tasks",
+  // which returns information about all tasks
+  {
+    // Trigger a batch allocation.
+    Clock::advance(masterFlags.allocation_interval);
 
-  TaskInfo task;
-  task.set_name("test");
-  task.mutable_task_id()->set_value("1");
-  task.mutable_slave_id()->MergeFrom(offers.get()[0].slave_id());
-  task.mutable_resources()->MergeFrom(offers.get()[0].resources());
-  task.mutable_executor()->MergeFrom(DEFAULT_EXECUTOR_INFO);
+    Future<Offer> offer = offers.get();
+    AWAIT_READY(offer);
 
-  EXPECT_CALL(exec, registered(_, _, _, _));
+    Resources taskResources = Resources::parse("cpus:0.1;mem:1").get();
 
-  EXPECT_CALL(exec, launchTask(_, _))
-    .WillOnce(SendStatusUpdateFromTask(TASK_RUNNING));
+    TaskInfo task;
+    task.set_name("test");
+    task.mutable_task_id()->set_value("1");
+    task.mutable_slave_id()->MergeFrom(offer->slave_id());
+    task.mutable_resources()->MergeFrom(taskResources);
+    task.mutable_executor()->MergeFrom(DEFAULT_EXECUTOR_INFO);
 
-  Future<TaskStatus> status;
-  EXPECT_CALL(sched, statusUpdate(&driver, _))
-    .WillOnce(FutureArg<1>(&status));
+    EXPECT_CALL(exec, registered(_, _, _, _));
 
-  driver.launchTasks(offers.get()[0].id(), {task});
+    EXPECT_CALL(exec, launchTask(_, _))
+      .WillOnce(SendStatusUpdateFromTask(TASK_RUNNING));
 
-  AWAIT_READY(status);
-  EXPECT_EQ(TASK_RUNNING, status->state());
-  EXPECT_TRUE(status->has_executor_id());
-  EXPECT_EQ(exec.id, status->executor_id());
+    Future<TaskStatus> status;
+    EXPECT_CALL(sched, statusUpdate(&driver, _))
+      .WillOnce(FutureArg<1>(&status));
 
-  Future<Response> response = process::http::get(
-      master.get()->pid,
-      "tasks",
-      None(),
-      createBasicAuthHeaders(DEFAULT_CREDENTIAL));
+    driver.launchTasks(offer->id(), {task});
 
-  AWAIT_EXPECT_RESPONSE_STATUS_EQ(OK().status, response);
-  AWAIT_EXPECT_RESPONSE_HEADER_EQ(APPLICATION_JSON, "Content-Type", response);
+    AWAIT_READY(status);
+    EXPECT_EQ(TASK_RUNNING, status->state());
+    EXPECT_TRUE(status->has_executor_id());
+    EXPECT_EQ(exec.id, status->executor_id());
 
-  Try<JSON::Value> value = JSON::parse<JSON::Value>(response->body);
-  ASSERT_SOME(value);
+    Future<Response> response = process::http::get(
+        master.get()->pid,
+        "tasks",
+        None(),
+        createBasicAuthHeaders(DEFAULT_CREDENTIAL));
 
-  Try<JSON::Value> expected = JSON::parse(
-      "{"
-        "\"tasks\":"
-          "[{"
-              "\"executor_id\":\"default\","
-              "\"id\":\"1\","
-              "\"name\":\"test\","
-              "\"state\":\"TASK_RUNNING\""
-          "}]"
-      "}");
+    AWAIT_EXPECT_RESPONSE_STATUS_EQ(OK().status, response);
+    AWAIT_EXPECT_RESPONSE_HEADER_EQ(APPLICATION_JSON, "Content-Type", response);
 
-  ASSERT_SOME(expected);
+    Try<JSON::Value> value = JSON::parse<JSON::Value>(response->body);
+    ASSERT_SOME(value);
 
-  EXPECT_TRUE(value->contains(expected.get()));
+    Try<JSON::Value> expected = JSON::parse(
+        "{"
+          "\"tasks\":"
+            "[{"
+                "\"executor_id\":\"default\","
+                "\"id\":\"1\","
+                "\"name\":\"test\","
+                "\"state\":\"TASK_RUNNING\""
+            "}]"
+        "}");
+
+    ASSERT_SOME(expected);
+
+    EXPECT_TRUE(value->contains(expected.get()));
+  }
+
+  // Testing the query for a specific task
+  {
+    // Trigger a batch allocation.
+    Clock::advance(masterFlags.allocation_interval);
+
+    Future<Offer> offer = offers.get();
+    AWAIT_READY(offer);
+
+    Resources taskResources = Resources::parse("cpus:0.1;mem:1").get();
+    TaskInfo task;
+    task.set_name("test1");
+    task.mutable_task_id()->set_value("a");
+    task.mutable_slave_id()->MergeFrom(offer->slave_id());
+    task.mutable_resources()->MergeFrom(taskResources);
+    task.mutable_executor()->MergeFrom(DEFAULT_EXECUTOR_INFO);
+
+    EXPECT_CALL(exec, launchTask(_, _))
+      .WillOnce(SendStatusUpdateFromTask(TASK_RUNNING));
+
+    Future<TaskStatus> status;
+    EXPECT_CALL(sched, statusUpdate(&driver, _))
+      .WillOnce(FutureArg<1>(&status));
+
+    driver.launchTasks(offer->id(), {task});
+
+    AWAIT_READY(status);
+    EXPECT_EQ(TASK_RUNNING, status->state());
+    EXPECT_TRUE(status->has_executor_id());
+    EXPECT_EQ(exec.id, status->executor_id());
+
+    Future<Response> response = process::http::get(
+        master.get()->pid,
+        "tasks/a",
+        None(),
+        createBasicAuthHeaders(DEFAULT_CREDENTIAL));
+
+    AWAIT_EXPECT_RESPONSE_STATUS_EQ(OK().status, response);
+    AWAIT_EXPECT_RESPONSE_HEADER_EQ(APPLICATION_JSON, "Content-Type", response);
+
+    Try<JSON::Value> value = JSON::parse<JSON::Value>(response->body);
+    ASSERT_SOME(value);
+
+    Try<JSON::Value> expected = JSON::parse(
+        "{"
+          "\"tasks\":"
+            "[{"
+                "\"executor_id\":\"default\","
+                "\"id\":\"a\","
+                "\"name\":\"test1\","
+                "\"state\":\"TASK_RUNNING\""
+            "}]"
+        "}");
+
+    ASSERT_SOME(expected);
+    EXPECT_TRUE(value->contains(expected.get()));
+  }
+
+  // Testing the query for a subset of tasks
+  {
+    // Trigger a batch allocation.
+    Clock::advance(masterFlags.allocation_interval);
+
+    Future<Offer> offer1 = offers.get();
+    AWAIT_READY(offer1);
+
+    // The first task has status "TASK_RUNNING"
+    Resources taskResources1 = Resources::parse("cpus:0.1;mem:1").get();
+    TaskInfo task1;
+    task1.set_name("task_1");
+    task1.mutable_task_id()->set_value("a1");
+    task1.mutable_slave_id()->MergeFrom(offer1->slave_id());
+    task1.mutable_resources()->MergeFrom(taskResources1);
+    task1.mutable_executor()->MergeFrom(DEFAULT_EXECUTOR_INFO);
+
+    EXPECT_CALL(exec, launchTask(_, _))
+      .WillOnce(SendStatusUpdateFromTask(TASK_RUNNING));
+
+    Future<TaskStatus> status1;
+    EXPECT_CALL(sched, statusUpdate(&driver, _))
+      .WillOnce(FutureArg<1>(&status1));
+
+    driver.launchTasks(offer1->id(), {task1});
+
+    AWAIT_READY(status1);
+    EXPECT_EQ(TASK_RUNNING, status1->state());
+    EXPECT_TRUE(status1->has_executor_id());
+    EXPECT_EQ(exec.id, status1->executor_id());
+
+
+    Future<Offer> offer2 = offers.get();
+    AWAIT_READY(offer2);
+
+    // The second task has status "TASK_FINISHED"
+    Resources taskResources2 = Resources::parse("cpus:0.1;mem:1").get();
+    TaskInfo task2;
+    task2.set_name("task_2");
+    task2.mutable_task_id()->set_value("a2");
+    task2.mutable_slave_id()->MergeFrom(offer2->slave_id());
+    task2.mutable_resources()->MergeFrom(taskResources2);
+    task2.mutable_executor()->MergeFrom(DEFAULT_EXECUTOR_INFO);
+
+    EXPECT_CALL(exec, launchTask(_, _))
+      .WillOnce(SendStatusUpdateFromTask(TASK_FINISHED));
+
+    Future<TaskStatus> status2;
+    EXPECT_CALL(sched, statusUpdate(&driver, _))
+      .WillOnce(FutureArg<1>(&status2));
+
+    driver.launchTasks(offer2->id(), {task2});
+
+    AWAIT_READY(status2);
+    EXPECT_EQ(TASK_FINISHED, status2->state());
+    EXPECT_TRUE(status2->has_executor_id());
+    EXPECT_EQ(exec.id, status2->executor_id());
+
+    Future<Offer> offer3 = offers.get();
+    AWAIT_READY(offer3);
+
+    // The third task has status "TASK_FINISHED"
+    Resources taskResources3 = Resources::parse("cpus:0.1;mem:1").get();
+    TaskInfo task3;
+    task3.set_name("task_3");
+    task3.mutable_task_id()->set_value("a3");
+    task3.mutable_slave_id()->MergeFrom(offer3->slave_id());
+    task3.mutable_resources()->MergeFrom(taskResources3);
+    task3.mutable_executor()->MergeFrom(DEFAULT_EXECUTOR_INFO);
+
+    EXPECT_CALL(exec, launchTask(_, _))
+      .WillOnce(SendStatusUpdateFromTask(TASK_FINISHED));
+
+    Future<TaskStatus> status3;
+    EXPECT_CALL(sched, statusUpdate(&driver, _))
+      .WillOnce(FutureArg<1>(&status3));
+
+    driver.launchTasks(offer3->id(), {task3});
+
+    AWAIT_READY(status3);
+    EXPECT_EQ(TASK_FINISHED, status3->state());
+    EXPECT_TRUE(status3->has_executor_id());
+    EXPECT_EQ(exec.id, status3->executor_id());
+
+    Future<Response> response = process::http::get(
+        master.get()->pid,
+        "tasks/a1;a2",
+        None(),
+        createBasicAuthHeaders(DEFAULT_CREDENTIAL));
+
+    AWAIT_EXPECT_RESPONSE_STATUS_EQ(OK().status, response);
+    AWAIT_EXPECT_RESPONSE_HEADER_EQ(APPLICATION_JSON, "Content-Type", response);
+
+    Try<JSON::Value> value = JSON::parse<JSON::Value>(response->body);
+    ASSERT_SOME(value);
+    JSON::Object obj = value->as<JSON::Object>();
+
+    Result<JSON::Array> taskArray = obj.find<JSON::Array>("tasks");
+    ASSERT_SOME(taskArray);
+
+    if(taskArray.isSome()){
+      EXPECT_TRUE(taskArray.get().values.size() == 2);
+
+      // There are two possible ordering of result
+      Try<JSON::Value> expected1 = JSON::parse(
+        "{"
+          "\"tasks\":"
+            "[{"
+                "\"executor_id\":\"default\","
+                "\"id\":\"a1\","
+                "\"name\":\"task_1\","
+                "\"state\":\"TASK_RUNNING\""
+            "},{"
+                "\"executor_id\":\"default\","
+                "\"id\":\"a2\","
+                "\"name\":\"task_2\","
+                "\"state\":\"TASK_FINISHED\""
+            "}]"
+        "}");
+
+      Try<JSON::Value> expected2 = JSON::parse(
+        "{"
+          "\"tasks\":"
+            "[{"
+                "\"executor_id\":\"default\","
+                "\"id\":\"a2\","
+                "\"name\":\"task_2\","
+                "\"state\":\"TASK_FINISHED\""
+            "},{"
+                "\"executor_id\":\"default\","
+                "\"id\":\"a1\","
+                "\"name\":\"task_1\","
+                "\"state\":\"TASK_RUNNING\""
+            "}]"
+        "}");
+      LOG(INFO) << "first version " << value->contains(expected1.get()) <<
+          " second version " << value->contains(expected2.get());
+
+      EXPECT_TRUE(value->contains(expected1.get()) ||
+          value->contains(expected2.get()));
+    }
+  }
 
   EXPECT_CALL(exec, shutdown(_))
     .Times(AtMost(1));

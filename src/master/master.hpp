@@ -1521,6 +1521,13 @@ private:
         const process::Owned<ObjectApprover>& frameworksApprover,
         const process::Owned<ObjectApprover>& tasksApprover) const;
 
+    // Called to retrieve all tasks (when the 'unique_ids' set is empty),
+    // or a specific set of tasks by their ids
+    std::vector<const Task*> getTasks(
+        process::Owned<ObjectApprover>& frameworksApprover,
+        process::Owned<ObjectApprover>& tasksApprover,
+        hashset<std::string> unique_ids) const;
+
     process::Future<process::http::Response> createVolumes(
         const mesos::master::Call& call,
         const Option<process::http::authentication::Principal>& principal,

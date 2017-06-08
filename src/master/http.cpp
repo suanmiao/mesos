@@ -3727,6 +3727,11 @@ string Master::Http::TASKS_HELP()
 }
 
 
+// Called to get information about all tasks (when the path is '/master/tasks'),
+// Or to get information about a set of tasks
+// (when the path is '/master/tasks/id_1;id_2;id_3'),
+// Or only one task ('/master/tasks/task_id') the order of the result might
+// not be the same as the input, duplicates will be eliminated
 Future<Response> Master::Http::tasks(
     const Request& request,
     const Option<Principal>& principal) const
@@ -3781,58 +3786,21 @@ Future<Response> Master::Http::tasks(
       Owned<ObjectApprover> tasksApprover;
       tie(frameworksApprover, tasksApprover) = approvers;
 
-      // Construct framework list with both active and completed frameworks.
-      vector<const Framework*> frameworks;
-      foreachvalue (Framework* framework, master->frameworks.registered) {
-        // Skip unauthorized frameworks.
-        if (!approveViewFrameworkInfo(frameworksApprover, framework->info)) {
-          continue;
+      hashset<string> unique_ids;
+      if(request.url.path.length() >= std::string("/master/tasks/").length()){
+        std::string task_ids = request.url.path.substr(
+            std::string("/master/tasks/").length(), request.url.path.length());
+        vector<std::string> ids = strings::split(task_ids, ";");
+        foreach(std::string id, ids){
+          if(!id.empty()){
+            unique_ids.insert(id);
+          }
         }
-
-        frameworks.push_back(framework);
-      }
-
-      foreachvalue (const Owned<Framework>& framework,
-                    master->frameworks.completed) {
-        // Skip unauthorized frameworks.
-        if (!approveViewFrameworkInfo(frameworksApprover, framework->info)) {
-          continue;
-        }
-
-        frameworks.push_back(framework.get());
       }
 
       // Construct task list with both running and finished tasks.
-      vector<const Task*> tasks;
-      foreach (const Framework* framework, frameworks) {
-        foreachvalue (Task* task, framework->tasks) {
-          CHECK_NOTNULL(task);
-          // Skip unauthorized tasks.
-          if (!approveViewTask(tasksApprover, *task, framework->info)) {
-            continue;
-          }
-
-          tasks.push_back(task);
-        }
-
-        foreachvalue (const Owned<Task>& task, framework->unreachableTasks) {
-          // Skip unauthorized tasks.
-          if (!approveViewTask(tasksApprover, *task.get(), framework->info)) {
-            continue;
-          }
-
-          tasks.push_back(task.get());
-        }
-
-        foreach (const Owned<Task>& task, framework->completedTasks) {
-          // Skip unauthorized tasks.
-          if (!approveViewTask(tasksApprover, *task.get(), framework->info)) {
-            continue;
-          }
-
-          tasks.push_back(task.get());
-        }
-      }
+      vector<const Task*> tasks = getTasks(frameworksApprover,
+          tasksApprover, unique_ids);
 
       // Sort tasks by task status timestamp. Default order is descending.
       // The earliest timestamp is chosen for comparison when
@@ -3858,6 +3826,122 @@ Future<Response> Master::Http::tasks(
   }));
 }
 
+
+vector<const Task*> Master::Http::getTasks(
+    Owned<ObjectApprover>& frameworksApprover,
+    Owned<ObjectApprover>& tasksApprover, hashset<std::string> unique_ids) const
+{
+  // Construct the task list by going through all frameworks,
+  // if it's finished in the middle, return
+  vector<const Task*> tasks;
+  // Construct framework list with both active and completed frameworks.
+  vector<const Framework*> frameworks;
+  foreachvalue (Framework* framework, master->frameworks.registered) {
+    // Skip unauthorized frameworks.
+    if (!approveViewFrameworkInfo(frameworksApprover, framework->info)) {
+      continue;
+    }
+    // Go through all tasks for that framework,
+    // if found and meeting exit criteria, return
+    foreachvalue (const Task* task, framework->tasks) {
+      CHECK_NOTNULL(task);
+      // Skip unauthorized tasks.
+      if (!approveViewTask(tasksApprover, *task, framework->info)) {
+        continue;
+      }
+      if(unique_ids.size() == 0 ||
+          unique_ids.contains(task->task_id().value())){
+        tasks.push_back(task);
+      }
+      if(tasks.size() == unique_ids.size()){
+        return tasks;
+      }
+    }
+
+    foreachvalue (const Owned<Task>& task, framework->unreachableTasks) {
+      // Skip unauthorized tasks.
+      if (!approveViewTask(tasksApprover, *task.get(), framework->info)) {
+        continue;
+      }
+      if(unique_ids.size() == 0 ||
+          unique_ids.contains(task.get()->task_id().value())){
+        tasks.push_back(task.get());
+      }
+      if(tasks.size() == unique_ids.size()){
+        return tasks;
+      }
+    }
+
+    foreach (const Owned<Task>& task, framework->completedTasks) {
+      // Skip unauthorized tasks.
+      if (!approveViewTask(tasksApprover, *task.get(), framework->info)) {
+        continue;
+      }
+
+      if(unique_ids.size() == 0 ||
+          unique_ids.contains(task.get()->task_id().value())){
+        tasks.push_back(task.get());
+      }
+      if(tasks.size() == unique_ids.size()){
+        return tasks;
+      }
+    }
+  }
+
+  foreachvalue (const Owned<Framework>& framework,
+                master->frameworks.completed) {
+    // Skip unauthorized frameworks.
+    if (!approveViewFrameworkInfo(frameworksApprover, framework->info)) {
+      continue;
+    }
+
+    // Go through all tasks for that framework,
+    // if found and meeting exit criteria, return
+    foreachvalue (const Task* task, framework->tasks) {
+      CHECK_NOTNULL(task);
+      // Skip unauthorized tasks.
+      if (!approveViewTask(tasksApprover, *task, framework->info)) {
+        continue;
+      }
+      if(unique_ids.size() == 0 ||
+          unique_ids.contains(task->task_id().value())){
+        tasks.push_back(task);
+      }
+      if(tasks.size() == unique_ids.size()){
+        return tasks;
+      }
+    }
+
+    foreachvalue (const Owned<Task>& task, framework->unreachableTasks) {
+      // Skip unauthorized tasks.
+      if (!approveViewTask(tasksApprover, *task.get(), framework->info)) {
+        continue;
+      }
+      if(unique_ids.size() == 0 ||
+          unique_ids.contains(task.get()->task_id().value())){
+        tasks.push_back(task.get());
+      }
+      if(tasks.size() == unique_ids.size()){
+        return tasks;
+      }
+    }
+
+    foreach (const Owned<Task>& task, framework->completedTasks) {
+      // Skip unauthorized tasks.
+      if (!approveViewTask(tasksApprover, *task.get(), framework->info)) {
+        continue;
+      }
+      if(unique_ids.size() == 0 ||
+          unique_ids.contains(task.get()->task_id().value())){
+        tasks.push_back(task.get());
+      }
+      if(tasks.size() == unique_ids.size()){
+        return tasks;
+      }
+    }
+  }
+  return tasks;
+}
 
 Future<Response> Master::Http::getTasks(
     const mesos::master::Call& call,
