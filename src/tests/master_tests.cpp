@@ -2270,6 +2270,162 @@ TEST_F(MasterTest, SlavesEndpointTwoSlaves)
 }
 
 
+// Ensures that the query returns the correct slave information.
+TEST_F(MasterTest, SlavesEndpointQuerySlave)
+{
+  master::Flags masterFlags = CreateMasterFlags();
+  masterFlags.registry = "replicated_log";
+
+  // Start up the master.
+  Try<Owned<cluster::Master>> master = StartMaster(masterFlags);
+  ASSERT_SOME(master);
+
+  Owned<MasterDetector> detector = master.get()->createDetector();
+
+  // Start a couple of slaves. Their only use is for them to register
+  // to the master.
+  Future<SlaveRegisteredMessage> slave1RegisteredMessage =
+    FUTURE_PROTOBUF(SlaveRegisteredMessage(), master.get()->pid, _);
+
+  Try<Owned<cluster::Slave>> slave1 = StartSlave(detector.get());
+  ASSERT_SOME(slave1);
+
+  AWAIT_READY(slave1RegisteredMessage);
+
+  Future<SlaveRegisteredMessage> slave2RegisteredMessage =
+    FUTURE_PROTOBUF(
+        SlaveRegisteredMessage(), master.get()->pid, Not(slave1.get()->pid));
+
+  Try<Owned<cluster::Slave>> slave2 = StartSlave(detector.get());
+  ASSERT_SOME(slave2);
+
+  AWAIT_READY(slave2RegisteredMessage);
+
+  // Querying the status of the first slave.
+  {
+    std::string slave_id = slave1RegisteredMessage.get().slave_id().value();
+
+    Future<Response> response = process::http::get(
+        master.get()->pid,
+        "slaves?slave_id=" + slave_id,
+        None(),
+        createBasicAuthHeaders(DEFAULT_CREDENTIAL));
+
+    AWAIT_EXPECT_RESPONSE_STATUS_EQ(OK().status, response);
+    AWAIT_EXPECT_RESPONSE_HEADER_EQ(APPLICATION_JSON, "Content-Type", response);
+
+    const Try<JSON::Value> value =
+      JSON::parse<JSON::Value>(response->body);
+
+    ASSERT_SOME(value);
+    Try<JSON::Object> obj = value->as<JSON::Object>();
+
+    // Check that there is one element in the array.
+    Result<JSON::Array> array = obj->find<JSON::Array>("slaves");
+    ASSERT_SOME(array);
+    EXPECT_EQ(1u, array->values.size());
+
+    Try<JSON::Value> expected = JSON::parse(
+        "{"
+          "\"slaves\":"
+            "[{"
+                "\"id\":\"" + slave_id + "\""
+            "}]"
+        "}");
+
+    ASSERT_SOME(expected);
+
+    EXPECT_TRUE(value->contains(expected.get()));
+  }
+  // Querying the status of the second slave.
+  {
+    std::string slave_id = slave2RegisteredMessage.get().slave_id().value();
+
+    Future<Response> response = process::http::get(
+        master.get()->pid,
+        "slaves?slave_id=" + slave_id,
+        None(),
+        createBasicAuthHeaders(DEFAULT_CREDENTIAL));
+
+    AWAIT_EXPECT_RESPONSE_STATUS_EQ(OK().status, response);
+    AWAIT_EXPECT_RESPONSE_HEADER_EQ(APPLICATION_JSON, "Content-Type", response);
+
+    const Try<JSON::Value> value =
+      JSON::parse<JSON::Value>(response->body);
+
+    ASSERT_SOME(value);
+    Try<JSON::Object> obj = value->as<JSON::Object>();
+
+    ASSERT_SOME(value);
+
+    // Check that there is one element in the array.
+    Result<JSON::Array> array = obj->find<JSON::Array>("slaves");
+    ASSERT_SOME(array);
+    EXPECT_EQ(1u, array->values.size());
+
+    // Check the ID, format for the slave.
+    Try<JSON::Value> expected = JSON::parse(
+        "{"
+          "\"slaves\":"
+            "[{"
+                "\"id\":\"" + slave_id + "\""
+            "}]"
+        "}");
+
+    ASSERT_SOME(expected);
+
+    EXPECT_TRUE(value->contains(expected.get()));
+  }
+
+  // Stop the slave while the master is down.
+  master->reset();
+  slave1.get()->terminate();
+  slave1->reset();
+
+  // Restart the master.
+  master = StartMaster(masterFlags);
+  ASSERT_SOME(master);
+
+  // Ensure that slaves are in the "recovered_slaves" field
+  {
+    std::string slave_id = slave2RegisteredMessage.get().slave_id().value();
+
+    Future<Response> response = process::http::get(
+        master.get()->pid,
+        "slaves?slave_id=" + slave_id,
+        None(),
+        createBasicAuthHeaders(DEFAULT_CREDENTIAL));
+
+    AWAIT_EXPECT_RESPONSE_STATUS_EQ(OK().status, response);
+    AWAIT_EXPECT_RESPONSE_HEADER_EQ(APPLICATION_JSON, "Content-Type", response);
+
+    const Try<JSON::Value> value =
+      JSON::parse<JSON::Value>(response->body);
+
+    ASSERT_SOME(value);
+    Try<JSON::Object> obj = value->as<JSON::Object>();
+
+    ASSERT_SOME(value);
+
+    // Check that there is one element in the array.
+    Result<JSON::Array> array = obj->find<JSON::Array>("recovered_slaves");
+    ASSERT_SOME(array);
+    EXPECT_EQ(1u, array->values.size());
+
+    Try<JSON::Value> expected = JSON::parse(
+        "{"
+          "\"recovered_slaves\":"
+            "[{"
+                "\"id\":\"" + slave_id + "\""
+            "}]"
+        "}");
+
+    ASSERT_SOME(expected);
+
+    EXPECT_TRUE(value->contains(expected.get()));
+  }
+}
+
 // This test ensures that when a slave is recovered from the registry
 // but does not re-register with the master, it is marked unreachable
 // in the registry, the framework is informed that the slave is lost,

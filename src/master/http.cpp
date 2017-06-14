@@ -2295,9 +2295,13 @@ Future<Response> Master::Http::slaves(
     return redirect(request);
   }
 
-  auto slaves = [this](JSON::ObjectWriter* writer) {
-    writer->field("slaves", [this](JSON::ArrayWriter* writer) {
+  auto slaves = [this, request](JSON::ObjectWriter* writer) {
+    SlaveRequestFilter filter(request);
+    writer->field("slaves", [this, filter](JSON::ArrayWriter* writer) {
       foreachvalue (const Slave* slave, master->slaves.registered) {
+        if(!filter.valid(slave->info).get()){
+          continue;
+        }
         writer->element([&slave](JSON::ObjectWriter* writer) {
           json(writer, Full<Slave>(*slave));
 
@@ -2360,8 +2364,12 @@ Future<Response> Master::Http::slaves(
     });
 
     // Model all of the recovered slaves.
-    writer->field("recovered_slaves", [this](JSON::ArrayWriter* writer) {
+    writer->field("recovered_slaves", [this, filter](
+        JSON::ArrayWriter* writer) {
       foreachvalue (const SlaveInfo& slaveInfo, master->slaves.recovered) {
+        if(!filter.valid(slaveInfo).get()){
+          continue;
+        }
         writer->element([&slaveInfo](JSON::ObjectWriter* writer) {
           json(writer, slaveInfo);
         });

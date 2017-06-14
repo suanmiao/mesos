@@ -160,6 +160,50 @@ public:
 };
 
 
+/**
+ * This filter object is used to filter certain objects such as Framework info,
+ * task info and Slave info, it can either take an ObjectApprover as a
+ * parameter of a HTTP request
+ */
+class ObjectFilter
+{
+public:
+  virtual ~ObjectFilter() = default;
+};
+
+// We have this abstract class because there would be other subclasses such as
+// TaskRequestFilter, FrameworkRequestFilter, ExecutorRequestFilter, etc..
+// At the same time, we might have ObjectApproverFilter, which takes
+// ObjectApprover as a parameter. Thus it's necessary to create a superclass
+// for TaskRequestFilter, FrameworkRequestFilter .etc..
+class RequestFilter : public ObjectFilter
+{
+public:
+  RequestFilter(const process::http::Request& request)
+  : filterRequest(request){}
+
+protected:
+  const process::http::Request& filterRequest;
+};
+
+
+class SlaveRequestFilter : public RequestFilter
+{
+public:
+  SlaveRequestFilter(const process::http::Request& request)
+  : RequestFilter(request){
+    if(filterRequest.url.query.get("slave_id").isSome()){
+      slave_id = filterRequest.url.query.get("slave_id").get();
+    }
+  }
+
+  Try<bool> valid(const SlaveInfo& slave_info) const noexcept;
+
+private:
+  std::string slave_id;
+};
+
+
 bool approveViewFrameworkInfo(
     const process::Owned<ObjectApprover>& frameworksApprover,
     const FrameworkInfo& frameworkInfo);

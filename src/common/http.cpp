@@ -1124,4 +1124,14 @@ void logRequest(const process::http::Request& request)
                 : "");
 }
 
+
+Try<bool> SlaveRequestFilter::valid(const SlaveInfo& slave_info) const noexcept
+{
+  if(slave_id.empty()){
+    return true;
+  }
+  return !slave_id.compare(slave_info.id().value());
+}
+
+
 }  // namespace mesos {
