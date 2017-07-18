@@ -3858,49 +3858,40 @@ TEST_F(MasterTest, TasksEndpoint)
     Try<JSON::Value> value = JSON::parse<JSON::Value>(response->body);
     ASSERT_SOME(value);
 
-    // Two possible orderings of the result.
-    Try<JSON::Value> expected1 = JSON::parse(
+    JSON::Object object = value->as<JSON::Object>();
+    Result<JSON::Array> array = object.find<JSON::Array>("tasks");
+    ASSERT_SOME(array);
+    EXPECT_EQ(2u, array->values.size());
+
+    Try<JSON::Value> taskJson1 = JSON::parse(
         "{"
-          "\"tasks\":"
-            "[{"
-                "\"executor_id\":\"default\","
-                "\"framework_id\":\"" + frameworkId->value() + "\","
-                "\"id\":\"1\","
-                "\"name\":\"test1\","
-                "\"state\":\"TASK_RUNNING\""
-              "},{"
-                "\"executor_id\":\"default\","
-                "\"framework_id\":\"" + frameworkId->value() + "\","
-                "\"id\":\"2\","
-                "\"name\":\"test2\","
-                "\"state\":\"TASK_RUNNING\""
-            "}]"
+            "\"executor_id\":\"default\","
+            "\"framework_id\":\"" + frameworkId->value() + "\","
+            "\"id\":\"1\","
+            "\"name\":\"test1\","
+            "\"state\":\"TASK_RUNNING\""
+          "}");
+
+    Try<JSON::Value> taskJson2 = JSON::parse(
+        "{"
+            "\"executor_id\":\"default\","
+            "\"framework_id\":\"" + frameworkId->value() + "\","
+            "\"id\":\"2\","
+            "\"name\":\"test2\","
+            "\"state\":\"TASK_RUNNING\""
         "}");
 
-    Try<JSON::Value> expected2 = JSON::parse(
-        "{"
-          "\"tasks\":"
-            "[{"
-                "\"executor_id\":\"default\","
-                "\"framework_id\":\"" + frameworkId->value() + "\","
-                "\"id\":\"2\","
-                "\"name\":\"test2\","
-                "\"state\":\"TASK_RUNNING\""
-              "},{"
-                "\"executor_id\":\"default\","
-                "\"framework_id\":\"" + frameworkId->value() + "\","
-                "\"id\":\"1\","
-                "\"name\":\"test1\","
-                "\"state\":\"TASK_RUNNING\""
-            "}]"
-        "}");
+    ASSERT_SOME(taskJson1);
+    ASSERT_SOME(taskJson2);
 
-    ASSERT_SOME(expected1);
-    ASSERT_SOME(expected2);
-
-    EXPECT_TRUE(
-        value->contains(expected1.get()) ||
-        value->contains(expected2.get()));
+    // Since tasks are stored in a hashmap, there is no strict guarantee of
+    // their ordering when listed. For this reason, we test both possibilities.
+    if (array->values[0].contains(taskJson1.get())) {
+      ASSERT_TRUE(array->values[1].contains(taskJson2.get()));
+    } else {
+      ASSERT_TRUE(array->values[0].contains(taskJson2.get()));
+      ASSERT_TRUE(array->values[1].contains(taskJson1.get()));
+    }
   }
 
   // Testing the query for a specific task.
