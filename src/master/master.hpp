@@ -506,6 +506,9 @@ protected:
       const Option<std::string>& principal,
       uint64_t capacity);
 
+  // Helper method for sending events to active subscribers.
+  void sendEvent(const mesos::master::Event& event);
+
   // Recovers state from the registrar.
   process::Future<Nothing> recover();
   void recoveredSlavesTimeout(const Registry& registry);
@@ -894,7 +897,9 @@ private:
       const process::Future<bool>& authorized);
 
   // Subscribes a client to the 'api/vX' endpoint.
-  void subscribe(const HttpConnection& http);
+  void subscribe(
+      const HttpConnection& http,
+      const Option<process::http::authentication::Principal>& principal);
 
   void teardown(Framework* framework);
 
@@ -1827,8 +1832,11 @@ private:
     // might only be interested in a subset of events.
     struct Subscriber
     {
-      Subscriber(const HttpConnection& _http)
-        : http(_http) {}
+      Subscriber(
+          const HttpConnection& _http,
+          const Option<process::http::authentication::Principal>& _principal)
+        : http(_http),
+          principal(_principal) {}
 
       // Not copyable, not assignable.
       Subscriber(const Subscriber&) = delete;
@@ -1844,6 +1852,7 @@ private:
       }
 
       HttpConnection http;
+      const Option<process::http::authentication::Principal>& principal;
     };
 
     // Sends the event to all subscribers connected to the 'api/vX' endpoint.

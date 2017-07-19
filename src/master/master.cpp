@@ -24,6 +24,7 @@
 #include <memory>
 #include <set>
 #include <sstream>
+#include <tuple>
 
 #include <mesos/module.hpp>
 #include <mesos/roles.hpp>
@@ -98,6 +99,8 @@ using std::list;
 using std::set;
 using std::shared_ptr;
 using std::string;
+using std::tie;
+using std::tuple;
 using std::vector;
 
 using process::await;
@@ -9515,6 +9518,88 @@ static bool isValidFailoverTimeout(const FrameworkInfo& frameworkInfo)
 }
 
 
+void Master::sendEvent(const mesos::master::Event& event)
+{
+  VLOG(1) << "Notifying all active subscribers about " << event.type()
+          << " event";
+
+  foreachvalue (
+      const Owned<Subscribers::Subscriber>& subscriber,
+      subscribers.subscribed) {
+    Future<Owned<AuthorizationAcceptor>> authorizeRole =
+      AuthorizationAcceptor::create(
+          subscriber->principal,
+          authorizer,
+          authorization::VIEW_ROLE);
+    Future<Owned<AuthorizationAcceptor>> authorizationAcceptor;
+    ObjectApprover::Object object;
+
+    switch (event.type()) {
+      case mesos::master::Event::TASK_ADDED: {
+        authorizationAcceptor =
+          AuthorizationAcceptor::create(
+              subscriber->principal,
+              authorizer,
+              authorization::VIEW_TASK);
+
+        Framework* framework =
+          getFramework(event.task_updated().framework_id());
+        if (framework == nullptr) {
+          continue;
+        }
+
+        object =
+          ObjectApprover::Object(event.task_added().task(), framework->info);
+        break;
+      }
+      case mesos::master::Event::TASK_UPDATED: {
+        authorizationAcceptor =
+          AuthorizationAcceptor::create(
+              subscriber->principal,
+              authorizer,
+              authorization::VIEW_TASK);
+
+        Framework* framework =
+          getFramework(event.task_updated().framework_id());
+        if (framework == nullptr) {
+          continue;
+        }
+
+        Task* task =
+          framework->getTask(event.task_updated().status().task_id());
+        if (task == nullptr) {
+          continue;
+        }
+
+        object = ObjectApprover::Object(*task, framework->info);
+        break;
+      }
+      default:
+        // All other event types are accepted by default.
+        authorizationAcceptor =
+          AuthorizationAcceptor::create(
+              subscriber->principal,
+              None(),
+              authorization::UNKNOWN);
+        break;
+    }
+    collect(authorizeRole, authorizationAcceptor)
+      .then([=](const tuple<Owned<AuthorizationAcceptor>,
+                            Owned<AuthorizationAcceptor>>& acceptors){
+        Owned<AuthorizationAcceptor> authorizeRole;
+        Owned<AuthorizationAcceptor> authorizationAcceptor;
+        tie(authorizeRole, authorizationAcceptor) = acceptors;
+
+        if (authorizeRole->accept() && authorizationAcceptor->accept(object)) {
+          subscriber->http.send<mesos::master::Event, v1::master::Event>(event);
+        }
+
+        return Nothing();
+    });
+  }
+}
+
+
 void Master::Subscribers::send(const mesos::master::Event& event)
 {
   VLOG(1) << "Notifying all active subscribers about " << event.type()
@@ -9540,7 +9625,9 @@ void Master::exited(const UUID& id)
 }
 
 
-void Master::subscribe(const HttpConnection& http)
+void Master::subscribe(
+    const HttpConnection& http,
+    const Option<Principal>& principal)
 {
   LOG(INFO) << "Added subscriber " << http.streamId
             << " to the list of active subscribers";
@@ -9553,7 +9640,8 @@ void Master::subscribe(const HttpConnection& http)
 
   subscribers.subscribed.put(
       http.streamId,
-      Owned<Subscribers::Subscriber>(new Subscribers::Subscriber{http}));
+      Owned<Subscribers::Subscriber>(
+          new Subscribers::Subscriber{http, principal}));
 }
 
 
