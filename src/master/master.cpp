@@ -9617,7 +9617,8 @@ void Master::subscribe(const HttpConnection& http)
 
   subscribers.subscribed.put(
       http.streamId,
-      Owned<Subscribers::Subscriber>(new Subscribers::Subscriber{http}));
+      Owned<Subscribers::Subscriber>(
+          new Subscribers::Subscriber{http.streamId, http}));
 }
 
 
