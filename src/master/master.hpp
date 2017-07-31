@@ -1821,14 +1821,65 @@ private:
 
   struct Subscribers
   {
+    // This process periodically sends heartbeats to a subscriber on the
+    // given HTTP connection.
+    class Heartbeater : public process::Process<Heartbeater>
+    {
+    public:
+      Heartbeater(const UUID& _uuid,
+                  const HttpConnection& _http,
+                  const Duration& _interval)
+        : process::ProcessBase(process::ID::generate("heartbeater")),
+          uuid(_uuid),
+          http(_http),
+          interval(_interval) {}
+
+    protected:
+      virtual void initialize() override
+      {
+        // Send the heartbeat after the interval, since the first heartbeat
+        // has been sent right after the 'getState' response in the SUBSCRIBE
+        // handler.
+        process::delay(interval, self(), &Self::heartbeat);
+      }
+
+    private:
+      void heartbeat()
+      {
+        // Only send a heartbeat if the connection is not closed.
+        if (http.closed().isPending()) {
+          VLOG(1) << "Sending heartbeat to " << uuid;
+
+          mesos::master::Event event;
+          event.set_type(mesos::master::Event::HEARTBEAT);
+
+          http.send<mesos::master::Event, v1::master::Event>(event);
+        }
+
+        process::delay(interval, self(), &Self::heartbeat);
+      }
+
+      const UUID uuid;
+      HttpConnection http;
+      const Duration interval;
+    };
+
+
     // Represents a client subscribed to the 'api/vX' endpoint.
     //
     // TODO(anand): Add support for filtering. Some subscribers
     // might only be interested in a subset of events.
     struct Subscriber
     {
-      Subscriber(const HttpConnection& _http)
-        : http(_http) {}
+      Subscriber(const UUID& _uuid, const HttpConnection& _http)
+        : uuid(_uuid),
+          http(_http) {
+        heartbeater =
+          process::Owned<Heartbeater>(
+              new Heartbeater(uuid, http, DEFAULT_HEARTBEAT_INTERVAL));
+
+        process::spawn(heartbeater.get());
+      }
 
       // Not copyable, not assignable.
       Subscriber(const Subscriber&) = delete;
@@ -1841,9 +1892,14 @@ private:
         // after passing ownership to the `Subscriber` object. See MESOS-5843
         // for more details.
         http.close();
+
+        terminate(heartbeater.get());
+        wait(heartbeater.get());
       }
 
+      UUID uuid;
       HttpConnection http;
+      process::Owned<Heartbeater> heartbeater;
     };
 
     // Sends the event to all subscribers connected to the 'api/vX' endpoint.

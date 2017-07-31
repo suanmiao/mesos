@@ -71,6 +71,8 @@ using mesos::slave::ContainerTermination;
 using mesos::internal::devolve;
 using mesos::internal::evolve;
 
+using mesos::internal::master::DEFAULT_HEARTBEAT_INTERVAL;
+
 using mesos::internal::recordio::Reader;
 
 using mesos::internal::slave::Fetcher;
@@ -1588,6 +1590,12 @@ TEST_P(MasterAPITest, SubscribeAgentEvents)
   EXPECT_EQ(0u, getState.get_tasks().tasks_size());
   EXPECT_EQ(0u, getState.get_executors().executors_size());
 
+  event = decoder.read();
+
+  AWAIT_READY(event);
+
+  EXPECT_EQ(v1::master::Event::HEARTBEAT, event->get().type());
+
   // Start one agent.
   Future<SlaveRegisteredMessage> agentRegisteredMessage =
     FUTURE_PROTOBUF(SlaveRegisteredMessage(), master.get()->pid, _);
@@ -1838,6 +1846,12 @@ TEST_P(MasterAPITest, Subscribe)
   EXPECT_EQ(0u, getState.get_executors().executors_size());
 
   event = decoder.read();
+
+  AWAIT_READY(event);
+
+  EXPECT_EQ(v1::master::Event::HEARTBEAT, event->get().type());
+
+  event = decoder.read();
   EXPECT_TRUE(event.isPending());
 
   const v1::Offer& offer = offers->offers(0);
@@ -1972,6 +1986,12 @@ TEST_P(MasterAPITest, FrameworksEvent)
   EXPECT_EQ(0u, getState.get_executors().executors_size());
 
   event = decoder.read();
+
+  AWAIT_READY(event);
+
+  EXPECT_EQ(v1::master::Event::HEARTBEAT, event->get().type());
+
+  event = decoder.read();
   EXPECT_TRUE(event.isPending());
 
   // Start a scheduler. The subscriber will receive a 'FRAMEWORK_ADDED' event
@@ -2103,6 +2123,79 @@ TEST_P(MasterAPITest, FrameworksEvent)
       event.get().get().framework_removed().framework_info().id();
 
     EXPECT_EQ(frameworkId, frameworkId_);
+  }
+}
+
+
+// This test tries to verify that the 'HEARTBEAT' events are sent in correct
+// time manner.
+TEST_P(MasterAPITest, Heartbeat)
+{
+  ContentType contentType = GetParam();
+
+  Try<Owned<cluster::Master>> master = this->StartMaster();
+  ASSERT_SOME(master);
+
+  v1::master::Call v1Call;
+  v1Call.set_type(v1::master::Call::SUBSCRIBE);
+
+  http::Headers headers = createBasicAuthHeaders(DEFAULT_CREDENTIAL);
+
+  headers["Accept"] = stringify(contentType);
+
+  Future<http::Response> response = http::streaming::post(
+      master.get()->pid,
+      "api/v1",
+      headers,
+      serialize(contentType, v1Call),
+      stringify(contentType));
+
+  AWAIT_EXPECT_RESPONSE_STATUS_EQ(http::OK().status, response);
+  AWAIT_EXPECT_RESPONSE_HEADER_EQ("chunked", "Transfer-Encoding", response);
+  ASSERT_EQ(http::Response::PIPE, response->type);
+  ASSERT_SOME(response->reader);
+
+  http::Pipe::Reader reader = response->reader.get();
+
+  auto deserializer =
+    lambda::bind(deserialize<v1::master::Event>, contentType, lambda::_1);
+
+  Reader<v1::master::Event> decoder(
+      Decoder<v1::master::Event>(deserializer), reader);
+
+  Future<Result<v1::master::Event>> event = decoder.read();
+  AWAIT_READY(event);
+
+  EXPECT_EQ(v1::master::Event::SUBSCRIBED, event->get().type());
+  const v1::master::Response::GetState& getState =
+      event->get().subscribed().get_state();
+
+  EXPECT_EQ(0u, getState.get_frameworks().frameworks_size());
+  EXPECT_EQ(0u, getState.get_agents().agents_size());
+  EXPECT_EQ(0u, getState.get_tasks().tasks_size());
+  EXPECT_EQ(0u, getState.get_executors().executors_size());
+
+  event = decoder.read();
+
+  AWAIT_READY(event);
+
+  EXPECT_EQ(v1::master::Event::HEARTBEAT, event->get().type());
+
+  event = decoder.read();
+  EXPECT_TRUE(event.isPending());
+
+  // Expects a heartbeat event after every heartbeat interval.
+
+  int i = 0;
+  for (; i < 10; i++) {
+    // Advance the clock to receive another heartbeat.
+    Clock::pause();
+    Clock::advance(DEFAULT_HEARTBEAT_INTERVAL);
+
+    AWAIT_READY(event);
+
+    event = decoder.read();
+    EXPECT_TRUE(event.isPending());
   }
 }
 
