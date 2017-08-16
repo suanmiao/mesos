@@ -69,6 +69,7 @@
 #include <stout/unreachable.hpp>
 #include <stout/utils.hpp>
 #include <stout/uuid.hpp>
+#include <stout/stopwatch.hpp>
 
 #include "authentication/cram_md5/authenticator.hpp"
 
@@ -2702,8 +2703,13 @@ void Master::_subscribe(
     framework->heartbeat();
 
     if (!subscribers.subscribed.empty()) {
+      Stopwatch watch;
+      watch.start();
       subscribers.send(
           protobuf::master::event::createFrameworkAdded(*framework));
+
+      watch.stop();
+      LOG(INFO) << "xxxx v1 frameworkAdded " << watch.elapsed();
     }
 
     return;
@@ -2753,8 +2759,14 @@ void Master::_subscribe(
   }
 
   if (!subscribers.subscribed.empty()) {
+    Stopwatch watch;
+    watch.start();
+
     subscribers.send(
         protobuf::master::event::createFrameworkUpdated(*framework));
+
+    watch.stop();
+    LOG(INFO) << "xxxx v1 frameworkUpdated " << watch.elapsed();
   }
 
   // Broadcast the new framework pid to all the slaves. We have to
@@ -3007,8 +3019,14 @@ void Master::_subscribe(
     framework->send(message);
 
     if (!subscribers.subscribed.empty()) {
+      Stopwatch watch;
+      watch.start();
+
       subscribers.send(
           protobuf::master::event::createFrameworkAdded(*framework));
+
+      watch.stop();
+      LOG(INFO) << "xxxx v1 frameworkAdded " << watch.elapsed();
     }
 
     return;
@@ -3084,8 +3102,14 @@ void Master::_subscribe(
       failoverFramework(framework, from);
 
       if (!subscribers.subscribed.empty()) {
+        Stopwatch watch;
+        watch.start();
+
         subscribers.send(
             protobuf::master::event::createFrameworkUpdated(*framework));
+
+        watch.stop();
+        LOG(INFO) << "xxxx v1 frameworkUpdated " << watch.elapsed();
       }
     } else {
       LOG(INFO) << "Allowing framework " << *framework
@@ -3136,8 +3160,14 @@ void Master::_subscribe(
       framework->send(message);
 
       if (!subscribers.subscribed.empty()) {
+        Stopwatch watch;
+        watch.start();
+
         subscribers.send(
             protobuf::master::event::createFrameworkUpdated(*framework));
+
+        watch.stop();
+        LOG(INFO) << "xxxx v1 frameworkUpdated " << watch.elapsed();
       }
       return;
     }
@@ -3157,8 +3187,14 @@ void Master::_subscribe(
     }
 
     if (!subscribers.subscribed.empty()) {
+      Stopwatch watch;
+      watch.start();
+
       subscribers.send(
           protobuf::master::event::createFrameworkUpdated(*framework));
+
+      watch.stop();
+      LOG(INFO) << "xxxx v1 frameworkUpdated " << watch.elapsed();
     }
   }
 
@@ -8510,8 +8546,14 @@ void Master::removeFramework(Framework* framework)
   frameworks.completed.set(framework->id(), Owned<Framework>(framework));
 
   if (!subscribers.subscribed.empty()) {
+    Stopwatch watch;
+    watch.start();
+
     subscribers.send(
         protobuf::master::event::createFrameworkRemoved(framework->info));
+
+    watch.stop();
+    LOG(INFO) << "xxxx v1 frameworkRemoved " << watch.elapsed();
   }
 }
 
@@ -8680,7 +8722,13 @@ void Master::addSlave(
       slave->usedResources);
 
   if (!subscribers.subscribed.empty()) {
+    Stopwatch watch;
+    watch.start();
+
     subscribers.send(protobuf::master::event::createAgentAdded(*slave));
+
+    watch.stop();
+    LOG(INFO) << "xxxx v1 agentAdded " << watch.elapsed();
   }
 }
 
@@ -8848,7 +8896,13 @@ void Master::_removeSlave(
   sendSlaveLost(slave->info);
 
   if (!subscribers.subscribed.empty()) {
+    Stopwatch watch;
+    watch.start();
+
     subscribers.send(protobuf::master::event::createAgentRemoved(slave->id));
+
+    watch.stop();
+    LOG(INFO) << "xxxx v1 agentRemoved " << watch.elapsed();
   }
 
   delete slave;
@@ -8921,8 +8975,14 @@ void Master::updateTask(Task* task, const StatusUpdate& update)
   task->mutable_statuses(task->statuses_size() - 1)->clear_data();
 
   if (sendSubscribersUpdate && !subscribers.subscribed.empty()) {
+    Stopwatch watch;
+    watch.start();
+
     subscribers.send(protobuf::master::event::createTaskUpdated(
         *task, task->state(), status));
+
+    watch.stop();
+    LOG(INFO) << "xxxx v1 taskUpdated " << watch.elapsed();
   }
 
   LOG(INFO) << "Updating the state of task " << task->task_id()
@@ -9713,7 +9773,11 @@ void Slave::addTask(Task* task)
   }
 
   if (!master->subscribers.subscribed.empty()) {
+    Stopwatch watch;
+    watch.start();
     master->subscribers.send(protobuf::master::event::createTaskAdded(*task));
+    watch.stop();
+    LOG(INFO) << "xxxx v1 taskAdded " << watch.elapsed();
   }
 
   LOG(INFO) << "Adding task " << taskId

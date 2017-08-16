@@ -61,6 +61,7 @@
 #include <stout/representation.hpp>
 #include <stout/result.hpp>
 #include <stout/strings.hpp>
+#include <stout/stopwatch.hpp>
 #include <stout/try.hpp>
 #include <stout/unreachable.hpp>
 #include <stout/utils.hpp>
@@ -812,6 +813,9 @@ Future<Response> Master::Http::subscribe(
                       Owned<ObjectApprover>,
                       Owned<ObjectApprover>>& approvers)
         -> Future<Response> {
+      Stopwatch watch;
+      watch.start();
+
       // Get approver from tuple.
       Owned<ObjectApprover> frameworksApprover;
       Owned<ObjectApprover> tasksApprover;
@@ -841,6 +845,8 @@ Future<Response> Master::Http::subscribe(
       heartbeatEvent.set_type(mesos::master::Event::HEARTBEAT);
       http.send<mesos::master::Event, v1::master::Event>(heartbeatEvent);
 
+      watch.stop();
+      LOG(INFO) << "xxxx v1 subscribe " << watch.elapsed();
       return ok;
     }));
 }
@@ -2800,6 +2806,9 @@ Future<Response> Master::Http::state(
                                     Owned<AuthorizationAcceptor>,
                                     Owned<AuthorizationAcceptor>>& acceptors)
           -> Response {
+      Stopwatch watch;
+      watch.start();
+
       // This lambda is consumed before the outer lambda
       // returns, hence capture by reference is fine here.
       auto state = [this, &acceptors](JSON::ObjectWriter* writer) {
@@ -2956,7 +2965,10 @@ Future<Response> Master::Http::state(
         writer->field("unregistered_frameworks", [](JSON::ArrayWriter*) {});
       };
 
-      return OK(jsonify(state), request.url.query.get("jsonp"));
+      Response x = OK(jsonify(state), request.url.query.get("jsonp"));
+      watch.stop();
+      LOG(INFO) << "xxxx v0 state " << watch.elapsed();
+      return x;
     }));
 }
 
